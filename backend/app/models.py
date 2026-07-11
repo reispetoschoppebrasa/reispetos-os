@@ -1,10 +1,33 @@
 from sqlalchemy import Column,Integer,String,Float,DateTime,ForeignKey,Text,Boolean
 from sqlalchemy.sql import func
 from .database import Base
+
 class User(Base):
-    __tablename__="users";id=Column(Integer,primary_key=True);username=Column(String(50),unique=True);password_hash=Column(String(255));role=Column(String(30))
+    __tablename__="users"
+    id=Column(Integer,primary_key=True)
+    username=Column(String(50),unique=True)
+    password_hash=Column(String(255))
+    role=Column(String(30))
+
 class Product(Base):
-    __tablename__="products";id=Column(Integer,primary_key=True);name=Column(String(120),unique=True);cost=Column(Float,default=0);price=Column(Float,default=0);stock=Column(Float,default=0);min_stock=Column(Float,default=10);sector=Column(String(50),default="Bar");active=Column(Boolean,default=True)
+    __tablename__="products"
+    id=Column(Integer,primary_key=True)
+    name=Column(String(120),unique=True,nullable=False)
+    code=Column(String(50),default="")
+    category=Column(String(80),default="Outros")
+    description=Column(Text,default="")
+    image_url=Column(Text,default="")
+    cost=Column(Float,default=0)
+    price=Column(Float,default=0)
+    stock=Column(Float,default=0)
+    min_stock=Column(Float,default=10)
+    unit=Column(String(30),default="un")
+    sector=Column(String(50),default="Bar")
+    printer=Column(String(50),default="Nenhuma")
+    track_stock=Column(Boolean,default=True)
+    active=Column(Boolean,default=True)
+    created_at=Column(DateTime(timezone=True),server_default=func.now())
+
 class TableOrder(Base):
     __tablename__="tables";id=Column(Integer,primary_key=True);name=Column(String(60));customer_name=Column(String(120),default="");status=Column(String(30),default="open");opened_at=Column(DateTime(timezone=True),server_default=func.now())
 class OrderItem(Base):
