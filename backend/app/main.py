@@ -10,7 +10,7 @@ from .database import Base,engine,get_db,SessionLocal
 from .models import *
 from .security import hash_password,verify_password,create_token,current_user
 
-app=FastAPI(title="REI'SPETOS OS API",version="1.2.0")
+app=FastAPI(title="REI'SPETOS OS API",version="1.3.0")
 front=os.getenv("FRONTEND_URL","*")
 app.add_middleware(CORSMiddleware,allow_origins=["*"] if front=="*" else [front],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 
@@ -38,6 +38,7 @@ class ProductStockIn(BaseModel): qty:float;movement_type:str="adjustment";note:s
 class TableIn(BaseModel): name:str;customer_name:str=""
 class ComandaIn(BaseModel): name:str="";customer_name:str=""
 class ItemIn(BaseModel): product_id:int;qty:float;note:str=""
+class ItemUpdate(BaseModel): qty:Optional[float]=None;note:Optional[str]=None
 class CloseIn(BaseModel): payment_method:str
 class StockIn(BaseModel): product_id:int;movement_type:str;qty:float;note:str=""
 class CustomerIn(BaseModel): name:str;phone:str
@@ -101,7 +102,7 @@ def startup():
     finally: db.close()
 
 @app.get("/health")
-def health(): return {"ok":True,"system":"REI'SPETOS OS","version":"1.2.0"}
+def health(): return {"ok":True,"system":"REI'SPETOS OS","version":"1.3.0"}
 @app.post("/auth/login")
 def login(p:LoginIn,db:Session=Depends(get_db)):
     u=db.query(User).filter_by(username=p.username.lower().strip()).first()
@@ -201,6 +202,29 @@ def add_comanda_item(cid:int,p:ItemIn,u=Depends(current_user),db:Session=Depends
     i=OrderItem(table_id=t.id,comanda_id=c.id,product_id=pr.id,product_name=pr.name,qty=p.qty,unit_price=pr.price,unit_cost=pr.cost,sector=pr.sector,note=p.note,status="waiting",paid=False)
     db.add(i);audit(db,u,"Item lançado",f"{t.name} / {c.customer_name} - {p.qty}x {pr.name}");db.commit();db.refresh(i);return i
 
+@app.put("/items/{iid}")
+def update_item(iid:int,p:ItemUpdate,u=Depends(current_user),db:Session=Depends(get_db)):
+    i=db.get(OrderItem,iid)
+    if not i or i.paid: raise HTTPException(404,"Item não encontrado")
+    if p.qty is not None:
+        if p.qty<=0: raise HTTPException(400,"Quantidade inválida")
+        diff=p.qty-i.qty
+        pr=db.get(Product,i.product_id)
+        if pr and pr.track_stock:
+            if diff>0 and pr.stock<diff: raise HTTPException(400,"Estoque insuficiente")
+            pr.stock-=diff
+            db.add(StockMovement(product_id=pr.id,product_name=pr.name,movement_type="item_edit",qty=-diff,note="Alteração de quantidade"))
+        i.qty=p.qty
+    if p.note is not None: i.note=p.note.strip()
+    audit(db,u,"Item editado",f"{i.qty}x {i.product_name}")
+    db.commit();db.refresh(i);return i
+
+@app.post("/items/{iid}/duplicate")
+def duplicate_item(iid:int,u=Depends(current_user),db:Session=Depends(get_db)):
+    i=db.get(OrderItem,iid)
+    if not i or i.paid: raise HTTPException(404,"Item não encontrado")
+    return add_comanda_item(i.comanda_id,ItemIn(product_id=i.product_id,qty=i.qty,note=i.note),u,db)
+
 @app.delete("/items/{iid}")
 def cancel_item(iid:int,u=Depends(current_user),db:Session=Depends(get_db)):
     i=db.get(OrderItem,iid)
@@ -247,7 +271,19 @@ def close_table(tid:int,p:CloseIn,u=Depends(current_user),db:Session=Depends(get
     t.status="closed";audit(db,u,"Mesa fechada",f"{t.name} - {total:.2f}");db.commit();return {"ok":True,"total":total}
 
 @app.get("/production")
-def production(u=Depends(current_user),db:Session=Depends(get_db)): return db.query(OrderItem).filter(OrderItem.status!="delivered").order_by(OrderItem.id.desc()).all()
+def production(u=Depends(current_user),db:Session=Depends(get_db)):
+    rows=db.query(OrderItem).filter(OrderItem.status!="delivered",OrderItem.paid==False).order_by(OrderItem.created_at,OrderItem.id).all()
+    out=[]
+    for i in rows:
+        t=db.get(TableOrder,i.table_id)
+        c=db.get(Comanda,i.comanda_id) if i.comanda_id else None
+        out.append({
+            "id":i.id,"table_id":i.table_id,"table_name":t.name if t else "Mesa",
+            "comanda_id":i.comanda_id,"customer_name":c.customer_name if c else (t.customer_name if t else "Cliente"),
+            "product_id":i.product_id,"product_name":i.product_name,"qty":i.qty,"unit_price":i.unit_price,
+            "sector":i.sector,"note":i.note,"status":i.status,"created_at":i.created_at
+        })
+    return out
 @app.post("/production/{iid}/{status}")
 def prod_status(iid:int,status:str,u=Depends(current_user),db:Session=Depends(get_db)):
     i=db.get(OrderItem,iid)

@@ -30,7 +30,7 @@ Variável: `VITE_API_URL=https://SEU-BACKEND.onrender.com`.
 
 As integrações reais de iFood e impressoras exigem credenciais/equipamentos externos.
 
-## Versão 1.2 — Mesas e Comandas Individuais
+## Versão 1.3 — Mesas e Comandas Individuais
 
 - Mapa com 20 mesas e 4 bistrôs.
 - Abertura de mesa pelo painel.
