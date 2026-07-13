@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI,Depends,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +10,7 @@ from .database import Base,engine,get_db,SessionLocal
 from .models import *
 from .security import hash_password,verify_password,create_token,current_user
 
-app=FastAPI(title="REI'SPETOS OS API",version="1.1.0")
+app=FastAPI(title="REI'SPETOS OS API",version="1.2.0")
 front=os.getenv("FRONTEND_URL","*")
 app.add_middleware(CORSMiddleware,allow_origins=["*"] if front=="*" else [front],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 
@@ -35,6 +36,7 @@ class ProductUpdate(BaseModel):
     sector:Optional[str]=None;printer:Optional[str]=None;track_stock:Optional[bool]=None;active:Optional[bool]=None
 class ProductStockIn(BaseModel): qty:float;movement_type:str="adjustment";note:str=""
 class TableIn(BaseModel): name:str;customer_name:str=""
+class ComandaIn(BaseModel): name:str="";customer_name:str=""
 class ItemIn(BaseModel): product_id:int;qty:float;note:str=""
 class CloseIn(BaseModel): payment_method:str
 class StockIn(BaseModel): product_id:int;movement_type:str;qty:float;note:str=""
@@ -64,9 +66,25 @@ def migrate_products():
                 try: conn.execute(text(f"ALTER TABLE products ADD COLUMN IF NOT EXISTS {name} {pg_kind}"))
                 except Exception: pass
 
+def migrate_comandas():
+    """Atualiza o banco existente sem apagar mesas, pedidos ou vendas."""
+    with engine.begin() as conn:
+        try:
+            rows=conn.execute(text("PRAGMA table_info(order_items)")).fetchall()
+            existing={r[1] for r in rows}
+            if "comanda_id" not in existing: conn.execute(text("ALTER TABLE order_items ADD COLUMN comanda_id INTEGER"))
+            if "paid" not in existing: conn.execute(text("ALTER TABLE order_items ADD COLUMN paid BOOLEAN DEFAULT 0"))
+        except Exception:
+            for stmt in [
+                "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS comanda_id INTEGER",
+                "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS paid BOOLEAN DEFAULT FALSE"
+            ]:
+                try: conn.execute(text(stmt))
+                except Exception: pass
+
 @app.on_event("startup")
 def startup():
-    Base.metadata.create_all(bind=engine);migrate_products();db=SessionLocal()
+    Base.metadata.create_all(bind=engine);migrate_products();migrate_comandas();db=SessionLocal()
     try:
         if not db.query(User).filter_by(username="admin").first(): db.add(User(username="admin",password_hash=hash_password("1234"),role="admin"))
         if not db.query(User).filter_by(username="caixa").first(): db.add(User(username="caixa",password_hash=hash_password("0000"),role="caixa"))
@@ -83,7 +101,7 @@ def startup():
     finally: db.close()
 
 @app.get("/health")
-def health(): return {"ok":True,"system":"REI'SPETOS OS","version":"1.1.0"}
+def health(): return {"ok":True,"system":"REI'SPETOS OS","version":"1.2.0"}
 @app.post("/auth/login")
 def login(p:LoginIn,db:Session=Depends(get_db)):
     u=db.query(User).filter_by(username=p.username.lower().strip()).first()
@@ -131,28 +149,103 @@ def product_movements(pid:int,u=Depends(current_user),db:Session=Depends(get_db)
 
 @app.get("/tables")
 def tables(u=Depends(current_user),db:Session=Depends(get_db)):
+    physical=[f"Mesa {i:02d}" for i in range(1,21)]+[f"Bistrô {i:02d}" for i in range(1,5)]
+    open_rows={t.name:t for t in db.query(TableOrder).filter(TableOrder.status=="open").all()}
     out=[]
-    for t in db.query(TableOrder).filter(TableOrder.status=="open").order_by(TableOrder.name).all():
-        items=db.query(OrderItem).filter(OrderItem.table_id==t.id).all();out.append({"id":t.id,"name":t.name,"customer_name":t.customer_name,"status":t.status,"total":sum(i.qty*i.unit_price for i in items),"items":items})
+    for name in physical:
+        t=open_rows.get(name)
+        if not t:
+            out.append({"id":None,"name":name,"status":"free","customer_name":"","total":0,"comandas":[]})
+            continue
+        comandas=[]
+        rows=db.query(Comanda).filter(Comanda.table_id==t.id).order_by(Comanda.id).all()
+        # Migra pedidos antigos para uma comanda padrão na primeira abertura da tela.
+        legacy=db.query(OrderItem).filter(OrderItem.table_id==t.id,OrderItem.comanda_id==None).count()
+        if legacy and not rows:
+            c=Comanda(table_id=t.id,name="Comanda 01",customer_name=t.customer_name or "Cliente",status="open")
+            db.add(c);db.flush()
+            db.query(OrderItem).filter(OrderItem.table_id==t.id,OrderItem.comanda_id==None).update({OrderItem.comanda_id:c.id})
+            db.commit();rows=[c]
+        for c in rows:
+            items=db.query(OrderItem).filter(OrderItem.comanda_id==c.id).order_by(OrderItem.id).all()
+            comandas.append({"id":c.id,"name":c.name,"customer_name":c.customer_name,"status":c.status,"total":sum(i.qty*i.unit_price for i in items if not i.paid),"items":items})
+        out.append({"id":t.id,"name":t.name,"status":"open","customer_name":t.customer_name,"total":sum(c["total"] for c in comandas),"comandas":comandas})
     return out
+
 @app.post("/tables")
 def open_table(p:TableIn,u=Depends(current_user),db:Session=Depends(get_db)):
     if db.query(TableOrder).filter(TableOrder.name==p.name,TableOrder.status=="open").first(): raise HTTPException(409,"Mesa já aberta")
-    t=TableOrder(name=p.name,customer_name=p.customer_name,status="open");db.add(t);audit(db,u,"Mesa aberta",p.name);db.commit();db.refresh(t);return t
-@app.post("/tables/{tid}/items")
-def add_item(tid:int,p:ItemIn,u=Depends(current_user),db:Session=Depends(get_db)):
-    t=db.get(TableOrder,tid);pr=db.get(Product,p.product_id)
+    t=TableOrder(name=p.name,customer_name=p.customer_name,status="open");db.add(t);db.flush()
+    c=Comanda(table_id=t.id,name="Comanda 01",customer_name=p.customer_name or "Cliente",status="open");db.add(c)
+    audit(db,u,"Mesa aberta",p.name);db.commit();db.refresh(t);return {"table_id":t.id,"comanda_id":c.id}
+
+@app.post("/tables/{tid}/comandas")
+def add_comanda(tid:int,p:ComandaIn,u=Depends(current_user),db:Session=Depends(get_db)):
+    t=db.get(TableOrder,tid)
+    if not t or t.status!="open": raise HTTPException(404,"Mesa não encontrada")
+    n=db.query(Comanda).filter(Comanda.table_id==tid).count()+1
+    c=Comanda(table_id=tid,name=p.name.strip() or f"Comanda {n:02d}",customer_name=p.customer_name.strip() or f"Cliente {n}",status="open")
+    db.add(c);audit(db,u,"Comanda criada",f"{t.name} - {c.customer_name}");db.commit();db.refresh(c);return c
+
+@app.post("/comandas/{cid}/items")
+def add_comanda_item(cid:int,p:ItemIn,u=Depends(current_user),db:Session=Depends(get_db)):
+    c=db.get(Comanda,cid);pr=db.get(Product,p.product_id)
+    if not c or c.status!="open": raise HTTPException(404,"Comanda não encontrada")
+    t=db.get(TableOrder,c.table_id)
     if not t or t.status!="open": raise HTTPException(404,"Mesa não encontrada")
     if not pr or not pr.active: raise HTTPException(404,"Produto não encontrado")
+    if p.qty<=0: raise HTTPException(400,"Quantidade inválida")
     if pr.track_stock and pr.stock<p.qty: raise HTTPException(400,"Estoque insuficiente")
     if pr.track_stock:
-        pr.stock-=p.qty;db.add(StockMovement(product_id=pr.id,product_name=pr.name,movement_type="sale",qty=-p.qty,note=t.name))
-    i=OrderItem(table_id=t.id,product_id=pr.id,product_name=pr.name,qty=p.qty,unit_price=pr.price,unit_cost=pr.cost,sector=pr.sector,note=p.note,status="waiting");db.add(i);audit(db,u,"Item lançado",f"{t.name} - {p.qty}x {pr.name}");db.commit();db.refresh(i);return i
+        pr.stock-=p.qty;db.add(StockMovement(product_id=pr.id,product_name=pr.name,movement_type="sale",qty=-p.qty,note=f"{t.name} / {c.customer_name}"))
+    i=OrderItem(table_id=t.id,comanda_id=c.id,product_id=pr.id,product_name=pr.name,qty=p.qty,unit_price=pr.price,unit_cost=pr.cost,sector=pr.sector,note=p.note,status="waiting",paid=False)
+    db.add(i);audit(db,u,"Item lançado",f"{t.name} / {c.customer_name} - {p.qty}x {pr.name}");db.commit();db.refresh(i);return i
+
+@app.delete("/items/{iid}")
+def cancel_item(iid:int,u=Depends(current_user),db:Session=Depends(get_db)):
+    i=db.get(OrderItem,iid)
+    if not i or i.paid: raise HTTPException(404,"Item não encontrado")
+    pr=db.get(Product,i.product_id)
+    if pr and pr.track_stock:
+        pr.stock+=i.qty;db.add(StockMovement(product_id=pr.id,product_name=pr.name,movement_type="cancel",qty=i.qty,note="Cancelamento de item"))
+    audit(db,u,"Item cancelado",f"{i.qty}x {i.product_name}");db.delete(i);db.commit();return {"ok":True}
+
+@app.post("/comandas/{cid}/close")
+def close_comanda(cid:int,p:CloseIn,u=Depends(current_user),db:Session=Depends(get_db)):
+    c=db.get(Comanda,cid)
+    if not c or c.status!="open": raise HTTPException(404,"Comanda não encontrada")
+    t=db.get(TableOrder,c.table_id)
+    items=db.query(OrderItem).filter(OrderItem.comanda_id==cid,OrderItem.paid==False).all()
+    if not items: raise HTTPException(400,"Comanda sem itens")
+    total=sum(i.qty*i.unit_price for i in items);cost=sum(i.qty*i.unit_cost for i in items)
+    db.add(Sale(origin="comanda",reference=f"{t.name} / {c.customer_name}",total=total,cost_total=cost,payment_method=p.payment_method))
+    for i in items: i.paid=True;i.status="delivered" if i.status!="delivered" else i.status
+    c.status="closed";c.closed_at=datetime.utcnow()
+    if db.query(Comanda).filter(Comanda.table_id==t.id,Comanda.status=="open",Comanda.id!=c.id).count()==0: t.status="closed"
+    audit(db,u,"Comanda fechada",f"{t.name} / {c.customer_name} - {total:.2f} - {p.payment_method}");db.commit();return {"ok":True,"total":total}
+
+# Compatibilidade com o MVP anterior.
+@app.post("/tables/{tid}/items")
+def add_item(tid:int,p:ItemIn,u=Depends(current_user),db:Session=Depends(get_db)):
+    c=db.query(Comanda).filter(Comanda.table_id==tid,Comanda.status=="open").order_by(Comanda.id).first()
+    if not c: raise HTTPException(404,"Comanda não encontrada")
+    return add_comanda_item(c.id,p,u,db)
+
 @app.post("/tables/{tid}/close")
 def close_table(tid:int,p:CloseIn,u=Depends(current_user),db:Session=Depends(get_db)):
     t=db.get(TableOrder,tid)
     if not t or t.status!="open": raise HTTPException(404,"Mesa não encontrada")
-    items=db.query(OrderItem).filter(OrderItem.table_id==tid).all();total=sum(i.qty*i.unit_price for i in items);cost=sum(i.qty*i.unit_cost for i in items);db.add(Sale(origin="table",reference=t.name,total=total,cost_total=cost,payment_method=p.payment_method));t.status="closed";audit(db,u,"Mesa fechada",f"{t.name} - {total:.2f}");db.commit();return {"ok":True,"total":total}
+    comandas=db.query(Comanda).filter(Comanda.table_id==tid,Comanda.status=="open").all()
+    total=0
+    for c in comandas:
+        items=db.query(OrderItem).filter(OrderItem.comanda_id==c.id,OrderItem.paid==False).all()
+        if not items: c.status="closed";continue
+        subtotal=sum(i.qty*i.unit_price for i in items);cost=sum(i.qty*i.unit_cost for i in items);total+=subtotal
+        db.add(Sale(origin="table",reference=f"{t.name} / {c.customer_name}",total=subtotal,cost_total=cost,payment_method=p.payment_method))
+        for i in items: i.paid=True;i.status="delivered"
+        c.status="closed";c.closed_at=datetime.utcnow()
+    t.status="closed";audit(db,u,"Mesa fechada",f"{t.name} - {total:.2f}");db.commit();return {"ok":True,"total":total}
+
 @app.get("/production")
 def production(u=Depends(current_user),db:Session=Depends(get_db)): return db.query(OrderItem).filter(OrderItem.status!="delivered").order_by(OrderItem.id.desc()).all()
 @app.post("/production/{iid}/{status}")

@@ -29,3 +29,15 @@ Raiz `frontend`, framework Vite, build `npm run build`, saída `dist`.
 Variável: `VITE_API_URL=https://SEU-BACKEND.onrender.com`.
 
 As integrações reais de iFood e impressoras exigem credenciais/equipamentos externos.
+
+## Versão 1.2 — Mesas e Comandas Individuais
+
+- Mapa com 20 mesas e 4 bistrôs.
+- Abertura de mesa pelo painel.
+- Várias comandas por mesa, uma para cada cliente.
+- Lançamento rápido de produtos por comanda.
+- Observação e quantidade por item.
+- Cancelamento com devolução automática ao estoque.
+- Fechamento individual por Pix, dinheiro, débito, crédito ou vale.
+- Fechamento automático da mesa quando a última comanda é paga.
+- Compatibilidade com dados da versão 1.1.

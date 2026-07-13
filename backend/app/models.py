@@ -30,8 +30,31 @@ class Product(Base):
 
 class TableOrder(Base):
     __tablename__="tables";id=Column(Integer,primary_key=True);name=Column(String(60));customer_name=Column(String(120),default="");status=Column(String(30),default="open");opened_at=Column(DateTime(timezone=True),server_default=func.now())
+class Comanda(Base):
+    __tablename__="comandas"
+    id=Column(Integer,primary_key=True)
+    table_id=Column(Integer,ForeignKey("tables.id"),nullable=False)
+    name=Column(String(60),default="Comanda 01")
+    customer_name=Column(String(120),default="")
+    status=Column(String(30),default="open")
+    opened_at=Column(DateTime(timezone=True),server_default=func.now())
+    closed_at=Column(DateTime(timezone=True),nullable=True)
+
 class OrderItem(Base):
-    __tablename__="order_items";id=Column(Integer,primary_key=True);table_id=Column(Integer,ForeignKey("tables.id"));product_id=Column(Integer,ForeignKey("products.id"));product_name=Column(String(120));qty=Column(Float);unit_price=Column(Float);unit_cost=Column(Float);sector=Column(String(50));note=Column(Text,default="");status=Column(String(30),default="waiting");created_at=Column(DateTime(timezone=True),server_default=func.now())
+    __tablename__="order_items"
+    id=Column(Integer,primary_key=True)
+    table_id=Column(Integer,ForeignKey("tables.id"))
+    comanda_id=Column(Integer,ForeignKey("comandas.id"),nullable=True)
+    product_id=Column(Integer,ForeignKey("products.id"))
+    product_name=Column(String(120))
+    qty=Column(Float)
+    unit_price=Column(Float)
+    unit_cost=Column(Float)
+    sector=Column(String(50))
+    note=Column(Text,default="")
+    status=Column(String(30),default="waiting")
+    paid=Column(Boolean,default=False)
+    created_at=Column(DateTime(timezone=True),server_default=func.now())
 class Sale(Base):
     __tablename__="sales";id=Column(Integer,primary_key=True);origin=Column(String(30),default="table");reference=Column(String(120),default="");total=Column(Float);cost_total=Column(Float);payment_method=Column(String(40));created_at=Column(DateTime(timezone=True),server_default=func.now())
 class StockMovement(Base):
