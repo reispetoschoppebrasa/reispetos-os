@@ -37,3 +37,11 @@ button.compact{padding:10px 14px;font-size:14px}
 .cashMovements{display:flex;flex-direction:column;gap:10px}.cashMovement{display:flex;justify-content:space-between;align-items:center;padding:15px 17px;border:1px solid #214b2e;border-radius:14px}.cashMovement div{display:flex;flex-direction:column;gap:4px}.cashMovement small{color:#91ad99}.cashMovement strong{font-size:18px}.cashMovement.supply strong{color:#35df78}.cashMovement.withdrawal strong,.cashMovement.expense strong{color:#ff7676}
 @media(max-width:1100px){.cashCards{grid-template-columns:repeat(2,1fr)}.cashHero{align-items:stretch;flex-direction:column}.cashOpenForm{min-width:0}}
 @media(max-width:700px){.cashCards{grid-template-columns:1fr}.cashOpenForm{flex-direction:column;align-items:stretch}}
+
+
+/* v1.7 — Produção em tempo real e fila de impressão */
+.kdsToolbar{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:18px 0}.kdsToolbar .filters{display:flex;gap:8px;flex-wrap:wrap}.kdsToolbar .filters button{background:#0c2717;border:1px solid #275c38}.kdsToolbar .filters button.active{background:#22c967;color:#041109}.printBtn{white-space:nowrap}
+.ticketMeta{display:flex;align-items:flex-end;gap:8px;flex-direction:column}.timer{font-weight:800;color:#9cb8a4}.timer.late{color:#ff6969}.productionTicket.urgent{border-color:#b52d2d;box-shadow:0 0 0 1px #b52d2d inset}.productionTicket.urgent:before{content:"ATRASADO";display:inline-block;background:#9d2323;color:#fff;font-size:11px;font-weight:900;padding:4px 7px;border-radius:7px;margin-bottom:8px}.ticketActions{display:grid;grid-template-columns:1fr auto;gap:8px}.ticketActions .secondary{padding-left:13px;padding-right:13px}.printNotice{margin-top:14px;color:#8fae97;font-size:13px}
+.productionSummary{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:900px){.kdsToolbar{align-items:stretch;flex-direction:column}.printBtn{width:100%}.productionSummary{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){.productionSummary{grid-template-columns:1fr}.ticketActions{grid-template-columns:1fr}}
